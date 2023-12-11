@@ -26,8 +26,11 @@ Posts mentioning WebAssembly or related tooling.
 - WebAssembly
 - Wasm
 - Emscripten
+- WASI
 
 # denyList
+
+- @hn100.bsky.social
 
 > Deny list will exclude any results from a given user. You can provide the username or DID.
 >
