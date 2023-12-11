@@ -13,7 +13,7 @@ WebAssembly
 
 # description
 
-Posts mentioning WebAssembly or Wasm
+Posts mentioning WebAssembly or related tooling.
 
 # searchTerms
 
@@ -25,6 +25,7 @@ Posts mentioning WebAssembly or Wasm
 
 - WebAssembly
 - Wasm
+- Emscripten
 
 # denyList
 
