@@ -43,7 +43,7 @@ Posts mentioning WebAssembly or related tooling.
 >
 > Set to `false` if you have higher limits via a paid Cloudflare plan.
 
-true
+false
 
 # avatar
 
