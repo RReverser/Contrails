@@ -1,6 +1,5 @@
 import { CONFIGS } from "./configs";
 import { appBskyFeedGetAuthorFeed, appBskyFeedSearchPosts } from "./bsky-api";
-import { jsonResponse } from "./utils";
 import { resetFetchCount, setSafeMode } from "./bsky-fetch-guarded";
 import { loginWithEnv } from "./bsky-auth";
 
@@ -24,7 +23,7 @@ export async function feedGeneratorWellKnown(request) {
       },
     ],
   };
-  return jsonResponse(didJson);
+  return Response.json(didJson);
 }
 
 async function staticPost(value) {
@@ -242,14 +241,14 @@ function objSafeGet(doc, field, defaultValue) {
   return value;
 }
 
-const EMPTY_FEED = { feed: [] };
+const emptyFeed = () => Response.json({ feed: [] });
 
 export async function getFeedSkeleton(request, env) {
   const url = new URL(request.url);
   const feedAtUrl = url.searchParams.get("feed");
   if (feedAtUrl === null) {
     console.warn(`feed parameter missing from query string`);
-    return EMPTY_FEED;
+    return emptyFeed();
   }
   let cursorParam = url.searchParams.get("cursor");
   if (
@@ -266,11 +265,11 @@ export async function getFeedSkeleton(request, env) {
 
   if (config === undefined) {
     console.warn(`Could not find Feed ID ${feedId}`);
-    return EMPTY_FEED;
+    return emptyFeed();
   }
   if (config.isEnabled !== true) {
     console.warn(`Feed ID ${feedId} is not enabled`);
-    return EMPTY_FEED;
+    return emptyFeed();
   }
   if (config.safeMode === undefined) {
     // this should never be the case
@@ -315,7 +314,7 @@ export async function getFeedSkeleton(request, env) {
     console.log(`query: ${JSON.stringify(query)}`);
     if (query.type === "search") {
       let cursor = objSafeGet(queryCursor, "cursor", null);
-      let response = await appBskyFeedSearchPosts(query.value, cursor);
+      let response = await appBskyFeedSearchPosts(session, query.value, cursor);
       if (response !== null) {
         items.push(...fromSearch(query, queryIdx, response, { cursor }));
       }
@@ -359,7 +358,7 @@ export async function getFeedSkeleton(request, env) {
   }
 
   let cursor = saveCursor(items, numQueries);
-  return jsonResponse({ feed: feed, cursor: cursor });
+  return Response.json({ feed: feed, cursor: cursor });
 }
 
 function loadCursor(cursorParam) {
