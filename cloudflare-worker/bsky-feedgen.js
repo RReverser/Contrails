@@ -1,7 +1,6 @@
 import { CONFIGS } from "./configs";
-import { appBskyFeedGetAuthorFeed } from "./bsky-api";
+import { appBskyFeedGetAuthorFeed, appBskyFeedSearchPosts } from "./bsky-api";
 import { jsonResponse } from "./utils";
-import { searchPost } from "./bsky-search";
 import { resetFetchCount, setSafeMode } from "./bsky-fetch-guarded";
 import { loginWithEnv } from "./bsky-auth";
 
@@ -122,10 +121,13 @@ function getNormalizedQuotedPhrases(query) {
 
 function fromSearch(query, queryIdx, response, searchParams) {
   let docs = [];
+  let feed = response.posts;
   let normalizedQuotedPhrases = getNormalizedQuotedPhrases(query);
-  if (Array.isArray(response)) {
-    for (let itemIdx = 0; itemIdx < response.length; itemIdx++) {
-      let searchResult = response[itemIdx];
+  if (Array.isArray(feed)) {
+    let cursor = searchParams.cursor;
+    let nextCursor = response.cursor;
+    for (let itemIdx = 0; itemIdx < feed.length; itemIdx++) {
+      let searchResult = feed[itemIdx];
       if (normalizedQuotedPhrases.length > 0) {
         // perform a case-insensitive search for all quoted phrases
         let matches = true;
@@ -140,19 +142,17 @@ function fromSearch(query, queryIdx, response, searchParams) {
           continue;
         }
       }
-      let did = searchResult.user.did;
-      let rkey = searchResult.tid.split("/").slice(-1)[0];
-      let timestamp = searchResult.post.createdAt;
-      let atURL = `at://${did}/app.bsky.feed.post/${rkey}`;
+      let timestampStr = searchResult.post.record.createdAt;
+      let timestamp = new Date(timestampStr).valueOf() * 1000000;
       docs.push({
         type: "search",
         queryIdx: queryIdx,
         timestamp: timestamp,
-        atURL: atURL,
+        atURL: searchResult.uri,
         itemIdx: itemIdx,
-        total: response.length,
-        count: searchParams.count,
-        offset: searchParams.offset,
+        total: feed.length,
+        cursor: cursor,
+        nextCursor: nextCursor,
       });
     }
   }
@@ -196,21 +196,16 @@ function saveCursor(items, numQueries) {
     let nextCursor = null;
     if (subcursor.empty === true) {
       nextCursor = { type: "empty" };
-    } else if (subcursor.type === "search") {
-      nextCursor = {
-        type: "search",
-        offset: subcursor.offset + subcursor.maxItemIdx + 1,
-      };
-    } else if (subcursor.type === "user") {
-      let userNextCursor = null;
+    } else if (subcursor.type === "search" || subcursor.type === "user") {
+      let searchNextCursor = null;
       if (subcursor.maxItemIdx + 1 < subcursor.total) {
-        userNextCursor = subcursor.cursor;
+        searchNextCursor = subcursor.cursor;
       } else {
-        userNextCursor = subcursor.nextCursor;
+        searchNextCursor = subcursor.nextCursor;
       }
       nextCursor = {
-        type: "user",
-        cursor: userNextCursor,
+        type: subcursor.type,
+        cursor: searchNextCursor,
       };
     }
     cursors.push(nextCursor);
@@ -224,7 +219,7 @@ function saveCursor(items, numQueries) {
         tuple = ["e"];
         break;
       case "search":
-        tuple = ["s", cursor["offset"]];
+        tuple = ["s", cursor["cursor"]];
         break;
       case "user":
         tuple = ["u", cursor["cursor"]];
@@ -247,12 +242,14 @@ function objSafeGet(doc, field, defaultValue) {
   return value;
 }
 
+const EMPTY_FEED = { feed: [] };
+
 export async function getFeedSkeleton(request, env) {
   const url = new URL(request.url);
   const feedAtUrl = url.searchParams.get("feed");
   if (feedAtUrl === null) {
     console.warn(`feed parameter missing from query string`);
-    return feedJsonResponse([]);
+    return EMPTY_FEED;
   }
   let cursorParam = url.searchParams.get("cursor");
   if (
@@ -269,11 +266,11 @@ export async function getFeedSkeleton(request, env) {
 
   if (config === undefined) {
     console.warn(`Could not find Feed ID ${feedId}`);
-    return feedJsonResponse([]);
+    return EMPTY_FEED;
   }
   if (config.isEnabled !== true) {
     console.warn(`Feed ID ${feedId} is not enabled`);
-    return feedJsonResponse([]);
+    return EMPTY_FEED;
   }
   if (config.safeMode === undefined) {
     // this should never be the case
@@ -317,20 +314,16 @@ export async function getFeedSkeleton(request, env) {
     }
     console.log(`query: ${JSON.stringify(query)}`);
     if (query.type === "search") {
-      let offset = objSafeGet(queryCursor, "offset", 0);
-      let searchParams = {
-        offset: offset,
-        count: 30,
-      };
-      let response = await searchPost(query.value, searchParams);
+      let cursor = objSafeGet(queryCursor, "cursor", null);
+      let response = await appBskyFeedSearchPosts(query.value, cursor);
       if (response !== null) {
-        items.push(...fromSearch(query, queryIdx, response, searchParams));
+        items.push(...fromSearch(query, queryIdx, response, { cursor }));
       }
     } else if (query.type === "user") {
       let cursor = objSafeGet(queryCursor, "cursor", null);
-      let response = await fetchUser(session, query.value, cursor);
+      let response = await appBskyFeedGetAuthorFeed(session, query.value, cursor);
       if (response !== null) {
-        items.push(...fromUser(query, queryIdx, response, { cursor: cursor }));
+        items.push(...fromUser(query, queryIdx, response, { cursor }));
       }
     } else if (query.type === "post") {
       if (showPins) {
@@ -344,9 +337,7 @@ export async function getFeedSkeleton(request, env) {
     }
   }
 
-  items = items.toSorted((b, a) =>
-    a.timestamp === b.timestamp ? 0 : a.timestamp < b.timestamp ? -1 : 1
-  );
+  items = items.toSorted((b, a) => a.timestamp - b.timestamp);
 
   if (config.denyList.size > 0) {
     items = items.filter((item) => {
@@ -384,7 +375,7 @@ function loadCursor(cursorParam) {
         if (Array.isArray(tuple)) {
           let type = tuple[0];
           if (type === "s") {
-            cursor = { type: "search", offset: tuple[1] };
+            cursor = { type: "search", cursor: tuple[1] };
           } else if (type === "u") {
             cursor = { type: "user", cursor: tuple[1] };
           } else if (type === "e") {
@@ -452,21 +443,4 @@ function buildQueries(allTerms, cursorParam = null) {
   orderedQueries.push(...pinnedPosts);
   orderedQueries.push(...queries);
   return orderedQueries;
-}
-
-async function fetchUser(session, user, cursor = null) {
-  let response = await appBskyFeedGetAuthorFeed(session, user, cursor);
-  if (response !== null) {
-    return await response.json();
-  } else {
-    return null;
-  }
-}
-
-function feedJsonResponse(items, cursor = null) {
-  let response = { feed: items };
-  if (cursor !== null) {
-    response.cursor = cursor;
-  }
-  return jsonResponse(response);
 }
